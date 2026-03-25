@@ -2142,12 +2142,115 @@ let CY=2026, activeQ='all', isUnlocked=false;
 let allData={}, pinBuf='', pinCb=null;
 let charts={}, activeMod='all';
 
+// ─── SUPABASE CONFIG ───
+// 🔧 CONFIGURA AQUÍ TU PROYECTO DE SUPABASE
+// Sigue las instrucciones del archivo INSTRUCCIONES_DESPLIEGUE.md
+const SUPABASE_URL = 'https://sksetslzhlnicrsbneap.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publisible_-UuLFatcT3UQJG7InpS_ig_FucfdB...';let supabaseReady = false;
+
+function sbHeaders(){
+  return {
+    'Content-Type': 'application/json',
+    'apikey': SUPABASE_ANON_KEY,
+    'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+    'Prefer': 'return=minimal'
+  };
+}
+
+async function sbGet(key){
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/hseq_store?key=eq.${key}&select=value`, {
+      headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` }
+    });
+    if (!res.ok) return null;
+    const rows = await res.json();
+    return rows.length ? rows[0].value : null;
+  } catch(e){ return null; }
+}
+
+async function sbSet(key, value){
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/hseq_store`, {
+      method: 'POST',
+      headers: { ...sbHeaders(), 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ key, value })
+    });
+  } catch(e){ console.warn('Supabase write error:', e); }
+}
+
+function initSupabase(){
+  if (SUPABASE_URL.includes('TU_PROJECT_ID')) {
+    console.warn('\u26a0\ufe0f Supabase no configurado. Usando localStorage.');
+    showConfigBanner();
+    return;
+  }
+  supabaseReady = true;
+
+  // Sincronización cada 5 segundos
+  let lastHash = '';
+  setInterval(async () => {
+    try {
+      const raw = await sbGet('hseq_v3');
+      if (!raw || raw === lastHash) return;
+      lastHash = raw;
+      const newData = JSON.parse(raw);
+      if (JSON.stringify(newData) !== JSON.stringify(allData)) {
+        allData = newData;
+        renderAll();
+        if (activeView === 'history') renderHistory();
+      }
+    } catch(e){}
+  }, 5000);
+
+  // PDFs cada 10s
+  let lastPDFHash = '';
+  setInterval(async () => {
+    try {
+      const raw = await sbGet('hseq_saved_pdfs');
+      if (!raw || raw === lastPDFHash) return;
+      lastPDFHash = raw;
+      const newPDFs = JSON.parse(raw);
+      if (JSON.stringify(newPDFs) !== JSON.stringify(savedPDFs)) {
+        savedPDFs = newPDFs;
+        if (activeView === 'savedpdfs') renderSavedPDFs();
+      }
+    } catch(e){}
+  }, 10000);
+
+  console.log('\u2705 Supabase conectado \u2014 sincronizaci\u00f3n activa');
+}
+
+function showConfigBanner(){
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#9a6200;color:white;padding:10px 20px;border-radius:10px;font-size:12px;font-weight:600;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,.3);cursor:pointer;';
+  banner.innerHTML = '\u26a0\ufe0f Modo local \u2014 Configura Supabase para sincronizaci\u00f3n en tiempo real';
+  banner.onclick = () => banner.remove();
+  document.body.appendChild(banner);
+  setTimeout(() => { try { banner.remove(); } catch(e){} }, 8000);
+}
+
 // ─── STORAGE ───
 async function loadData(){
-  try{if(window.storage){const r=await window.storage.get('hseq_v3');if(r&&r.value){allData=JSON.parse(r.value);return;}}}catch(e){}
-  allData={2025:BASE_DATA.map(r=>({...r,VERIFICACIÓN:'REALIZADO',Notas:''})),2026:BASE_DATA.map(r=>({...r}))};
+  if (supabaseReady) {
+    try {
+      const raw = await sbGet('hseq_v3');
+      if (raw) { allData = JSON.parse(raw); return; }
+    } catch(e){ console.warn('Supabase read error:', e); }
+  }
+  try {
+    const local = localStorage.getItem('hseq_v3');
+    if (local) { allData = JSON.parse(local); return; }
+  } catch(e){}
+  allData = {2025:BASE_DATA.map(r=>({...r,VERIFICACIÓN:'REALIZADO',Notas:''})),2026:BASE_DATA.map(r=>({...r}))};
 }
-function save(){try{window.storage&&window.storage.set('hseq_v3',JSON.stringify(allData));}catch(e){}}
+
+function save(){
+  if (supabaseReady) {
+    sbSet('hseq_v3', JSON.stringify(allData));
+  }
+  try { localStorage.setItem('hseq_v3', JSON.stringify(allData)); } catch(e){}
+}
+
 function getD(){return allData[CY]||[];}
 
 // ─── PIN ───
@@ -2704,11 +2807,18 @@ function expCSV(){const rows=getFiltered(),h=['Módulo','Categoría','Actividad'
 let savedPDFs = [];
 
 async function loadSavedPDFs(){
-  try{if(window.storage){const r=await window.storage.get('hseq_saved_pdfs');if(r&&r.value){savedPDFs=JSON.parse(r.value);return;}}}catch(e){}
-  savedPDFs=[];
+  if (supabaseReady) {
+    try {
+      const raw = await sbGet('hseq_saved_pdfs');
+      if (raw) { savedPDFs = JSON.parse(raw); return; }
+    } catch(e){}
+  }
+  try { const local = localStorage.getItem('hseq_saved_pdfs'); if(local){savedPDFs=JSON.parse(local);return;} } catch(e){}
+  savedPDFs = [];
 }
 function persistSavedPDFs(){
-  try{window.storage&&window.storage.set('hseq_saved_pdfs',JSON.stringify(savedPDFs));}catch(e){}
+  if (supabaseReady) { sbSet('hseq_saved_pdfs', JSON.stringify(savedPDFs)); }
+  try { localStorage.setItem('hseq_saved_pdfs', JSON.stringify(savedPDFs)); } catch(e){}
 }
 
 // Called from reports view — shows confirm modal
@@ -2840,6 +2950,7 @@ function toast(m){const el=document.getElementById('toast');el.textContent=m;el.
 // ─── INIT ───
 function renderAll(){renderStats();renderTable();if(activeView==='modkpi')renderModKpi();if(activeView==='history')renderHistory();}
 async function init(){
+  initSupabase();
   await loadSavedPDFs();
   // Set default fecha elaboración to today
   const df=document.getElementById('rpFecha');
