@@ -387,6 +387,7 @@ td{padding:9px 12px;vertical-align:top;font-size:12px;line-height:1.4;}
     <span class="ldot"></span>
     <span id="lockTxt">Modo lectura</span>
   </button>
+  <button class="btn-add" onclick="forceSyncUp()" title="Forzar subida de datos locales a la nube" style="background:#0ea5e9;margin-right:4px">☁️ Sync</button>
   <button class="btn-add" onclick="requireAuth(openAddModal)">＋ Actividad</button>
 </header>
 
@@ -2145,8 +2146,8 @@ let charts={}, activeMod='all';
 // ─── SUPABASE CONFIG ───
 // 🔧 CONFIGURA AQUÍ TU PROYECTO DE SUPABASE
 // Sigue las instrucciones del archivo INSTRUCCIONES_DESPLIEGUE.md
-const SUPABASE_URL = 'https://sksetslzhlnicrsbneap.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_-UuLFatcT3UQJG7InpS_ig_FucfdBR5';let supabaseReady = false;
+const SUPABASE_URL = 'https://ixlmuhlusmbikditybne.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml4bG11aGx1c21iaWtkaXR5Ym5lIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2NjY3OTksImV4cCI6MjA5MjI0Mjc5OX0.mshlJEZ7U-PERXx7g-ztvHAxGEA5bICaa5sh87TNP1s';let supabaseReady = false;
 
 function sbHeaders(){
   return {
@@ -2179,14 +2180,14 @@ async function sbSet(key, value){
 }
 
 function initSupabase(){
-  if (SUPABASE_URL.includes('TU_PROJECT_ID')) {
+  if (SUPABASE_URL.includes('TU_PROJECT')) {
     console.warn('\u26a0\ufe0f Supabase no configurado. Usando localStorage.');
     showConfigBanner();
     return;
   }
   supabaseReady = true;
 
-  // Sincronización cada 5 segundos
+  // Sincronización cada 5 segundos — siempre gana el más actualizado
   let lastHash = '';
   setInterval(async () => {
     try {
@@ -2194,10 +2195,17 @@ function initSupabase(){
       if (!raw || raw === lastHash) return;
       lastHash = raw;
       const newData = JSON.parse(raw);
-      if (JSON.stringify(newData) !== JSON.stringify(allData)) {
+      // Solo actualizar si SB tiene IGUAL o MÁS realizadas que el estado local
+      const sbR = _countRealizadas(newData);
+      const localR = _countRealizadas(allData);
+      if (sbR >= localR && JSON.stringify(newData) !== JSON.stringify(allData)) {
         allData = newData;
+        try { localStorage.setItem('hseq_v3', JSON.stringify(allData)); } catch(e){}
         renderAll();
         if (activeView === 'history') renderHistory();
+      } else if (sbR < localR) {
+        // Subir estado local a SB (el local es más reciente)
+        sbSet('hseq_v3', JSON.stringify(allData));
       }
     } catch(e){}
   }, 5000);
@@ -2230,25 +2238,86 @@ function showConfigBanner(){
 }
 
 // ─── STORAGE ───
+function _countRealizadas(data){
+  let n=0;
+  try{ Object.values(data).forEach(arr=>{ if(Array.isArray(arr)) n+=arr.filter(r=>r.VERIFICACIÓN==='REALIZADO').length; }); }catch(e){}
+  return n;
+}
+
 async function loadData(){
+  let sbData = null, localData = null;
+
+  // 1. Intentar Supabase
   if (supabaseReady) {
     try {
       const raw = await sbGet('hseq_v3');
-      if (raw) { allData = JSON.parse(raw); }
+      if (raw) { sbData = JSON.parse(raw); }
     } catch(e){ console.warn('Supabase read error:', e); }
   }
-  if (!Object.keys(allData).length) {
-    try {
-      const local = localStorage.getItem('hseq_v3');
-      if (local) { allData = JSON.parse(local); }
-    } catch(e){}
+
+  // 2. Intentar localStorage
+  try {
+    const local = localStorage.getItem('hseq_v3');
+    if (local) { localData = JSON.parse(local); }
+  } catch(e){}
+
+  // 3. Elegir el que tenga MÁS actividades realizadas (más actualizado)
+  const sbR = sbData ? _countRealizadas(sbData) : -1;
+  const lcR = localData ? _countRealizadas(localData) : -1;
+
+  if (sbData && sbR >= lcR) {
+    allData = sbData;
+    // Sincronizar localStorage con Supabase si SB es más nuevo
+    if (sbR > lcR) {
+      try { localStorage.setItem('hseq_v3', JSON.stringify(sbData)); } catch(e){}
+    }
+  } else if (localData) {
+    allData = localData;
+    // Subir localStorage a Supabase si es más nuevo
+    if (supabaseReady && lcR > sbR) {
+      try { sbSet('hseq_v3', JSON.stringify(localData)); } catch(e){}
+    }
   }
+
   // Eliminar historial de años anteriores a 2026
   Object.keys(allData).forEach(y=>{ if(parseInt(y)<2026){ delete allData[y]; } });
   if (!Object.keys(allData).length) {
     allData = {2026:BASE_DATA.map(r=>({...r}))};
   }
 }
+
+// ─── FORCE SYNC ───
+async function forceSyncUp() {
+  if (!supabaseReady) { toast('⚠️ Sin conexión a Supabase'); return; }
+  const btn = document.querySelector('button[onclick="forceSyncUp()"]');
+  if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
+  try {
+    const raw = await sbGet('hseq_v3');
+    const sbData = raw ? JSON.parse(raw) : null;
+    const sbR = sbData ? _countRealizadas(sbData) : 0;
+    const localR = _countRealizadas(allData);
+    // Merge: preservar el mayor número de realizadas por año
+    let merged = JSON.parse(JSON.stringify(allData));
+    if (sbData) {
+      for (const [año, sbActs] of Object.entries(sbData)) {
+        if (!merged[año]) { merged[año] = sbActs; continue; }
+        const sbYR = sbActs.filter(a=>a.VERIFICACIÓN==='REALIZADO').length;
+        const lcYR = merged[año].filter(a=>a.VERIFICACIÓN==='REALIZADO').length;
+        if (sbYR > lcYR) merged[año] = sbActs;
+      }
+    }
+    await sbSet('hseq_v3', JSON.stringify(merged));
+    allData = merged;
+    try { localStorage.setItem('hseq_v3', JSON.stringify(merged)); } catch(e){}
+    renderAll();
+    toast('☁️ Sync OK — ' + _countRealizadas(merged) + ' realizadas sincronizadas');
+  } catch(e) {
+    toast('❌ Error al sincronizar: ' + e.message);
+  } finally {
+    if (btn) { btn.textContent = '☁️ Sync'; btn.disabled = false; }
+  }
+}
+
 
 function save(){
   if (supabaseReady) {
