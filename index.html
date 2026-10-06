@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan de Trabajo HSEQ · se trasladó</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#EEF2F7;color:#0A2540;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px;}
+.card{background:#fff;border-radius:14px;box-shadow:0 4px 20px rgba(10,37,64,.13);max-width:520px;width:100%;padding:28px;}
+h1{font-size:18px;margin:0 0 8px;} p{font-size:14px;color:#5B6B7C;line-height:1.5;margin:8px 0;}
+#estado{font-weight:600;color:#0A2540;} a.btn{display:inline-block;margin-top:14px;background:#1598FF;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600;}
+</style></head><body>
+<div class="card">
+  <h1>El Plan de Trabajo HSEQ ahora está en el Sistema de Gestión LPS</h1>
+  <p id="estado">Guardando en la base unificada lo que tiene este navegador…</p>
+  <p>Luego se abrirá la nueva dirección automáticamente.</p>
+  <a class="btn" id="ir" href="https://hseq-colombia-production.up.railway.app/SISTEMA-DE-GESTION-LPS/plan-hse.html">Abrir el plan →</a>
+</div>
+<script>
+// Puente: este navegador puede tener en su memoria local (localStorage de github.io) la versión más
+// reciente del plan. Antes de redirigir, la une con la base unificada (qjuvggrqyzluajumeeie) sin perder nada:
+// por año gana la versión con más actividades REALIZADAS; PDFs guardados y módulos/categorías se suman.
+const URL_NUEVA='https://hseq-colombia-production.up.railway.app/SISTEMA-DE-GESTION-LPS/plan-hse.html';
+const SB='https://qjuvggrqyzluajumeeie.supabase.co';
+const KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFqdXZnZ3JxeXpsdWFqdW1lZWllIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAwMzI1MjgsImV4cCI6MjEwNTYwODUyOH0.Dn68hp-V0K18QdMK6GwM2bE1FI5m1i31N_yb_7hg2HU';
+const H={'apikey':KEY,'Authorization':'Bearer '+KEY};
+async function get(k){ const r=await fetch(SB+'/rest/v1/hseq_store?key=eq.'+k+'&select=value',{headers:H}); if(!r.ok) throw new Error('lectura '+r.status); const j=await r.json(); return j.length?j[0].value:null; }
+async function set(k,v){ const r=await fetch(SB+'/rest/v1/hseq_store',{method:'POST',headers:{...H,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify({key:k,value:v})}); if(!r.ok) throw new Error('escritura '+r.status); }
+const loc=k=>{ try{ return localStorage.getItem(k); }catch(e){ return null; } };
+const realizadas=a=>Array.isArray(a)?a.filter(x=>x.VERIFICACIÓN==='REALIZADO').length:-1;
+async function puente(){
+  const est=document.getElementById('estado');
+  try{
+    let cambios=0;
+    const lPlan=loc('hseq_v3');
+    if(lPlan){
+      const local=JSON.parse(lPlan), nubeRaw=await get('hseq_v3'), nube=nubeRaw?JSON.parse(nubeRaw):{};
+      const unido=JSON.parse(JSON.stringify(nube));
+      for(const [anio,acts] of Object.entries(local)){ if(!Array.isArray(acts))continue; if(!Array.isArray(unido[anio])||realizadas(acts)>realizadas(unido[anio])){ unido[anio]=acts; cambios++; } }
+      if(cambios||!nubeRaw) await set('hseq_v3',JSON.stringify(unido));
+    }
+    const lPdf=loc('hseq_saved_pdfs');
+    if(lPdf){
+      const local=JSON.parse(lPdf)||[], nubeRaw=await get('hseq_saved_pdfs'), nube=nubeRaw?(JSON.parse(nubeRaw)||[]):[];
+      const ya=new Set(nube.map(x=>JSON.stringify(x))); const faltan=local.filter(x=>!ya.has(JSON.stringify(x)));
+      if(faltan.length||!nubeRaw){ await set('hseq_saved_pdfs',JSON.stringify([...nube,...faltan])); cambios+=faltan.length; }
+    }
+    const lCus=loc('hseq_custom');
+    if(lCus){
+      const v=JSON.parse(lCus)||{}, nubeRaw=await get('hseq_custom'), n=nubeRaw?(JSON.parse(nubeRaw)||{}):{};
+      const u={mods:[...new Set([...(n.mods||[]),...(v.mods||[])])],cats:{...(n.cats||{})}};
+      Object.entries(v.cats||{}).forEach(([h,cs])=>{ u.cats[h]=[...new Set([...(u.cats[h]||[]),...cs])]; });
+      if(JSON.stringify(u)!==JSON.stringify(n)){ await set('hseq_custom',JSON.stringify(u)); cambios++; }
+    }
+    est.textContent = (lPlan||lPdf||lCus) ? (cambios?'✅ Datos de este navegador guardados en la base unificada.':'✅ La base unificada ya tenía todo lo de este navegador.') : 'Este navegador no tenía datos guardados del plan.';
+    setTimeout(()=>{ location.href=URL_NUEVA; }, 2500);
+  }catch(e){
+    est.textContent='⚠️ No se pudieron guardar los datos de este navegador ('+e.message+'). No cierre esta página y avise al administrador del sistema.';
+    document.getElementById('ir').textContent='Abrir el plan de todas formas →';
+  }
+}
+puente();
+</script>
+</body></html>
